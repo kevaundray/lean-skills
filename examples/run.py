@@ -187,8 +187,13 @@ def state_ops_source(n, steps, prog_len=60):
     return "\n".join(L) + "\n"
 
 
-def listing_source(proof, n_instr=80, n_lemmas=60):
-    """A program listing and `n_lemmas` instruction-fetch lemmas proved by `proof`."""
+PROOFS = {"simp": "by simp [prog]", "rfl": "rfl", "by-rfl": "by rfl", "decide": "by decide",
+          "decide-kernel": "by decide +kernel"}
+
+
+def listing_source(proof, n_instr=80, n_lemmas=60, indices=None):
+    """A program listing and instruction-fetch lemmas (for `indices`, default `n_lemmas` spread
+    over the listing) proved by `PROOFS[proof]`."""
     instrs = []
     for i in range(n_instr):
         k = i % 4
@@ -207,10 +212,10 @@ def listing_source(proof, n_instr=80, n_lemmas=60):
          "  | branch (rs1 rs2 : Nat) (off : Int)",
          "  deriving DecidableEq",
          "def prog : List Instr := [\n  " + ",\n  ".join(instrs) + "]"]
-    pf = {"simp": "by simp [prog]", "rfl": "rfl", "decide": "by decide"}[proof]
-    for j in range(n_lemmas):
-        k = (j * 37) % n_instr
-        L.append(f"theorem fetch_{j} : prog[{k}]? = some (Instr{instrs[k]}) := {pf}")
+    if indices is None:
+        indices = [(j * 37) % n_instr for j in range(n_lemmas)]
+    for j, k in enumerate(indices):
+        L.append(f"theorem fetch_{j} : prog[{k}]? = some (Instr{instrs[k]}) := {PROOFS[proof]}")
     return "\n".join(L) + "\n"
 
 
@@ -278,27 +283,39 @@ def exp_profile():
 
 
 def exp_defeq_step_lemmas():
-    """Step lemmas proved by `:= rfl` (tagged `@[defeq]`) vs `:= (rfl)` / `:= by rfl`."""
+    """Step lemmas proved by `:= rfl` (tagged `@[defeq]`) vs `:= (rfl)` / `:= by rfl`, and
+    `simp -implicitDefEqProofs`."""
     lean = Lean(OFFICIAL)
     rows = []
-    for name, steps in (("`:= rfl`", "rfl"), ("`:= (rfl)`", "(rfl)"), ("`:= by rfl`", "by rfl")):
-        d = fresh("defeq-step-lemmas", re.sub(r"\W", "", steps) or "rfl")
-        setup(lean, d, [HERE / "defeq-step-lemmas/Use.lean"],
+    variants = (("`:= rfl`", "rfl", "Use", "`simp [...]`"),
+                ("`:= rfl`", "rfl", "UseNoImplicit", "`simp -implicitDefEqProofs [...]`"),
+                ("`:= (rfl)`", "(rfl)", "Use", "`simp [...]`"),
+                ("`:= by rfl`", "by rfl", "Use", "`simp [...]`"))
+    for name, steps, use, call in variants:
+        d = fresh("defeq-step-lemmas", (re.sub(r"\W", "", steps) or "rfl") + use)
+        setup(lean, d, [HERE / "defeq-step-lemmas" / f for f in
+                        ("Use.lean", "UseNoImplicit.lean", "Dsimp.lean")],
               {"Ops": state_ops_source(200, steps)})
         lean.run(d / "Ops.lean", d)
-        cpu, o = lean.cpu(d / "Use.lean", d)
+        cpu, o = lean.cpu(d / f"{use}.lean", d)
         defeq = re.search(r"block_cons is @\[defeq\]: (\w+)", o)[1]
         used = re.search(r"mentions block_cons: (\w+)", o)[1]
-        prof = lean.run(d / "Use.lean", d, args=["-Dprofiler=true"])[3]
+        prof = lean.run(d / f"{use}.lean", d, args=["-Dprofiler=true"])[3]
         kernel = re.search(r"\ttype checking ([\d.]+m?s)", prof)
-        rows.append([name, defeq, used, secs(cpu), f"{heartbeats(o):,}k",
-                     kernel[1] if kernel else "n/a"])
+        rc, _, _, ds = lean.run(d / "Dsimp.lean", d)
+        dsimp = "yes" if rc == 0 else "no: " + next(
+            (l.split("error: ")[-1] for l in ds.splitlines() if "error" in l), "error")
+        rows.append([name, call, defeq, used, secs(cpu), f"{heartbeats(o):,}k",
+                     kernel[1] if kernel else "n/a", dsimp])
     return "\n".join([
         f"Toolchain: `{lean.version}`. `Ops.lean` from `state_ops_source(200, steps)`: 200 ops "
         "updating an 8-field structure, `prog` = 60 ops; `Use.lean` proves "
-        "`(block prog s).f7 = s.f7` by `simp [prog, block_cons, block_nil, Op.effect]`.\n",
-        table(["step lemma proof", "`@[defeq]`", "proof term mentions `block_cons`", "CPU",
-               "heartbeats", "kernel (`profiler`: type checking)"], rows),
+        "`(block prog s).f7 = s.f7` by `simp [prog, block_cons, block_nil, Op.effect]`; "
+        "`UseNoImplicit.lean` the same with `simp -implicitDefEqProofs`. `Dsimp.lean` tries "
+        "`dsimp only [block_cons]` on the step equation.\n",
+        table(["step lemma proof", "call", "`@[defeq]`", "proof term mentions `block_cons`", "CPU",
+               "heartbeats", "kernel (`profiler`: type checking)", "`dsimp only [block_cons]` works"],
+              rows),
         "\nWith `@[defeq]` step lemmas `simp` rewrites without recording a proof step, so the "
         "kernel has to re-establish those steps by unfolding. In this small state it is cheap; "
         "the large costs reported by ssz-fv and clifv come from large states/terms."])
@@ -325,25 +342,31 @@ def exp_frame_lemma():
         "UseFrame": use(lambda l: "block_f7 _ s", "Frame"),
         "BaseOps": "import Ops\n", "BaseFrame": "import Frame\n"}, libs=())
     lst = ", ".join(f".o{i}" for i in progs[0])
-    (d / "UseFrameExplicit.lean").write_text(
-        f"import Frame\ntheorem t0 (s : S) : (block [{lst}] s).f7 = s.f7 := by\n"
-        f"  exact block_f7 [{lst}] s\n")
+    head = f"import Frame\ntheorem t0 (s : S) : (block [{lst}] s).f7 = s.f7 :="
+    probes = {"UseFrameExplicit": f"{head} by\n  exact block_f7 [{lst}] s\n",
+              "UseFrameTerm": f"{head}\n  block_f7 [{lst}] s\n",
+              "UseFrameHave": f"{head} by\n  have h := block_f7 [{lst}] s\n  exact h\n"}
+    for name, text in probes.items():
+        (d / f"{name}.lean").write_text(text)
     rows = []
     for f in ("Ops", "Frame", "BaseOps", "UseSimp", "BaseFrame", "UseFrame"):
         cpu, _ = lean.cpu(d / f"{f}.lean", d)
         rows.append([f"`{f}`", secs(cpu)])
-    rc, cpu, _, o = lean.run(d / "UseFrameExplicit.lean", d)
-    err = next((l for l in o.splitlines() if "error" in l), "")
-    rows.append(["`UseFrameExplicit` (1 theorem, single run)", f"{secs(cpu)}; "
-                 + ("ok" if rc == 0 else f"error: `{err.split('error: ')[-1]}`")])
+    for name in probes:
+        rc, cpu, _, o = lean.run(d / f"{name}.lean", d)
+        err = next((l for l in o.splitlines() if "error" in l), "")
+        rows.append([f"`{name}` (1 theorem, single run)", f"{secs(cpu)}; "
+                     + ("ok" if rc == 0 else f"error: `{err.split('error: ')[-1]}`")])
     return "\n".join([
         f"Toolchain: `{lean.version}`. `Ops` = `state_ops_source({n}, \"(rfl)\")` (400 ops "
         "updating fields `f0`..`f6` of an 8-field structure, equation lemmas generated there). "
         f"`UseSimp` and `UseFrame` each prove `(block p s).f7 = s.f7` for {sites} different 60-op "
         "programs `p`; `UseSimp` by `simp [block_cons, block_nil, Op.effect]`, `UseFrame` by the "
         "lemma `block_f7` from `frame-lemma/Frame.lean` as `block_f7 _ s`. `Base*` import only. "
-        "`UseFrameExplicit` proves the first of these goals by `exact block_f7 [<the list>] s`, "
-        "restating the list instead of letting unification fill it.\n",
+        "The probes prove the first of these goals with the list restated: `UseFrameExplicit` by "
+        "`exact block_f7 [<the list>] s`, `UseFrameTerm` by the term `block_f7 [<the list>] s`, "
+        "`UseFrameHave` by `have h := block_f7 [<the list>] s; exact h` (the application is "
+        "elaborated without the expected type, then `h`'s type is unified with the goal).\n",
         table(["module", "CPU"], rows)])
 
 
@@ -397,19 +420,28 @@ def exp_listing_lemmas():
     """60 instruction-fetch lemmas over an 80-instruction listing."""
     lean = Lean(OFFICIAL)
     rows = []
-    labels = {"simp": "`by simp [prog]`", "decide": "`by decide`", "rfl": "`rfl`",
-              "none": "(no fetch lemmas)"}
-    for proof in ("none", "simp", "decide", "rfl"):
+    labels = {k: f"`{v}`" for k, v in PROOFS.items()} | {"none": "(no fetch lemmas)"}
+    for proof in ("none", "simp", "decide", "rfl", "by-rfl"):
         d = fresh("listing-lemmas", proof)
         src = listing_source("rfl", n_lemmas=0) if proof == "none" else listing_source(proof)
         setup(lean, d, sources={"Listing": src}, libs=())
         cpu, _ = lean.cpu(d / "Listing.lean", d)
         st = lean.stats(d, d / "Listing.olean")["Listing"]
         rows.append([labels[proof], secs(cpu), mb(st["bytes"])])
+    big = []
+    for proof in ("rfl", "by-rfl", "decide", "decide-kernel"):
+        d = fresh("listing-lemmas", "big-" + proof)
+        setup(lean, d, sources={"Big": listing_source(proof, n_instr=400, indices=[390])},
+              libs=())
+        rc, cpu, _, o = lean.run(d / "Big.lean", d)
+        err = next((l.split("error: ")[-1] for l in o.splitlines() if "error" in l), "")
+        big.append([labels[proof], "ok" if rc == 0 else f"error: `{err}`", secs(cpu)])
     return "\n".join([
         f"Toolchain: `{lean.version}`. `listing_source(proof)`: an 80-instruction `prog : List "
         "Instr` and 60 lemmas `prog[k]? = some (...)` (whole module, including the definitions).\n",
-        table(["proof of each fetch lemma", "module CPU", "olean"], rows)])
+        table(["proof of each fetch lemma", "module CPU", "olean"], rows),
+        "\nA 400-instruction listing with one lemma for entry 390 (single run, whole module):\n",
+        table(["proof", "result", "module CPU"], big)])
 
 
 def exp_decide():
@@ -418,7 +450,7 @@ def exp_decide():
     lean = Lean(OFFICIAL)
     d = fresh("decide")
     files = ["Decide", "DecideDeep", "DecideKernel", "DecideKernelLarge", "DecideKernelHuge",
-             "NativeDecide", "ListScan", "ArrayScan", "WellFounded"]
+             "NativeDecide", "ListScan", "ArrayScan", "WellFounded", "WellFoundedKernel"]
     setup(lean, d, [HERE / "decide" / f"{f}.lean" for f in files])
     rows = []
     outs = []
@@ -435,7 +467,7 @@ def exp_decide():
         rows.append([f"`{f}`", "ok" if runs[0][0] == 0 else "error", secs(cpu),
                      f"{int(rss[1]) / 1e6:.2f} GB" if rss else "", msg.replace("|", "\\|")])
         if f == "WellFounded":
-            outs.append(trim(o, 25))
+            outs.append(trim(o, 40))
     return "\n".join([f"Toolchain: `{lean.version}`.\n",
                       table(["file", "result", "CPU", "max RSS", "output (start)"], rows),
                       "\n`WellFounded.lean` output:\n", *outs])
@@ -575,12 +607,60 @@ def exp_fast_lean():
     step("`LEAN_DEV= fast-lean build`, clean (faithful)", [fl, "build"], {"LEAN_DEV": ""},
          clean=True)
     step("`fast-lean build Demo.Top`, clean", [fl, "build", "Demo.Top"], clean=True)
+    ops = []
+    for tcl in (Lean(OFFICIAL), dev_lean()):
+        if tcl:
+            od = fresh("fast-lean", "ops-" + tcl.tc.replace("/", "-").replace(":", "-"))
+            setup(tcl, od, sources={"Ops": ops_source(400, warm=True)}, libs=())
+            ops.append(f"`{tcl.tc}` {secs(tcl.cpu(od / 'Ops.lean', od)[0])}")
     return "\n".join([
         f"Project `Demo` (`lean-toolchain` = `{OFFICIAL}`): `Demo.Ops` = `ops_source(400, "
         "warm=True)`, `Demo.Heavy` proves `t` by the slow `simp [block, Op.effect]`, `Demo.Top` "
         "uses `t`. After each step, `lake env lean Axioms.lean` prints the axioms of `t` and "
         "`top` (`Built` = modules and other artifacts Lake reported as built).\n",
-        table(["step", "result", "CPU", "`Built` lines", "axioms"], rows)])
+        table(["step", "result", "CPU", "`Built` lines", "axioms"], rows),
+        "\n`Demo/Ops.lean` alone with `lean` (equation generation for the 400-arm `match`): "
+        + "; ".join(ops) + "."])
+
+
+VERSIONS = ["v4.26.0", "v4.28.0", "v4.29.0", "v4.31.0", "v4.33.1", "v4.34.0", "v4.35.0"]
+
+
+def exp_versions():
+    """Version ranges: `:= rfl` tagging, `native_decide` axioms, the stuck-`match` pathology."""
+    probe = ("def f (n : Nat) : Nat := n + 1\n"
+             "theorem a (n : Nat) : f n = n + 1 := rfl\n"
+             "theorem b (n : Nat) : f n = n + 1 := (rfl)\n"
+             "theorem c (n : Nat) : f n = n + 1 := by rfl\n"
+             "theorem nd : 2 + 2 = 4 := by native_decide\n"
+             "#print a\n#print b\n#print c\n#print axioms nd\n")
+    bad = (HERE / "stuck-match/Bad.lean").read_text().replace("import HB\n", "").replace(
+        "count_hb in\n", "")
+    rows = []
+    for v in VERSIONS:
+        try:
+            lean = Lean(f"leanprover/lean4:{v}")
+        except RuntimeError:
+            continue
+        d = fresh("versions", v)
+        setup(lean, d, sources={"Probe": probe, "Ops": ops_source(100, warm=True), "Bad": bad},
+              libs=())
+        o = lean.run(d / "Probe.lean", d, olean=False)[3]
+        tagged = [n for n in "abc" if re.search(rf"@\[defeq\] theorem {n} ", o)]
+        ax = re.search(r"'nd' depends on axioms: \[(.*)\]", o)
+        lean.run(d / "Ops.lean", d)
+        rc = lean.run(d / "Bad.lean", d)[0]
+        st = lean.stats(d, d / "Bad.olean").get("Bad", {}) if rc == 0 else {}
+        rows.append([v, ", ".join({"a": "`:= rfl`", "b": "`:= (rfl)`", "c": "`:= by rfl`"}[n]
+                                  for n in tagged) or "none",
+                     ax[1] if ax else "?",
+                     f"{st.get('matchEqns', '?')} / {st.get('splitters', '?')}"])
+    return "\n".join([
+        "Official toolchains. `@[defeq]` tagging of `theorem a : f n = n + 1 := rfl` (and `(rfl)`, "
+        "`by rfl`) as shown by `#print`; axioms of `theorem nd : 2 + 2 = 4 := by native_decide`; "
+        "`stuck-match/Bad.lean` at N = 100 (match equations / splitters stored in `Bad.olean`).\n",
+        table(["Lean", "tagged `@[defeq]`", "`native_decide` axioms", "stuck match: match eqns / "
+               "splitters"], rows)])
 
 
 def exp_snippets():
@@ -607,6 +687,7 @@ EXPERIMENTS = {
     "lake-weak-args": exp_lake_weak_args,
     "fast-lean": exp_fast_lean,
     "snippets": exp_snippets,
+    "versions": exp_versions,
 }
 
 

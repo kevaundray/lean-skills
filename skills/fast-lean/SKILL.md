@@ -32,7 +32,7 @@ lake build                         # official toolchain: rebuilds and fully chec
 
 | Mode | Effect | Visible as |
 |---|---|---|
-| `proofs` | theorem/example proofs are not elaborated; they become the axiom `skippedProof`. Kept: `rfl`, `by rfl`, `by exact rfl`, `Eq.refl _` (cheap, and `dsimp` needs them as `@[defeq]`), and proofs whose goal still has metavariables | `#print axioms` lists `skippedProof` |
+| `proofs` | theorem/example proofs are not elaborated; they become the axiom `skippedProof`. Kept: `rfl`, `by rfl`, `by exact rfl`, `Eq.refl _` (cheap; `:= rfl` ones are `@[defeq]` and used by `dsimp`), and proofs whose goal still has metavariables | `#print axioms` lists `skippedProof` |
 | `checks` | no kernel type checking, no linters | — |
 | `sat` | `bv_decide` trusts the SAT solver's UNSAT answer (no LRAT check) and caches solved problems in `~/.cache/lean/trusted-unsat` | `skippedProof` |
 
@@ -57,10 +57,12 @@ Statements, definitions and their compiled code are still elaborated, so type er
 
   | Step | CPU | `#print axioms` afterwards |
   |---|---|---|
-  | `lake build` (official) | 48.5 s | `[propext]` |
-  | `fast-lean build` | 9.0 s | `[Lean.skippedProof]` |
-  | then `lake build` (official): rebuilds all 4 targets | 56.0 s | `[propext]` |
-  | `LEAN_DEV= fast-lean build` (faithful, perf patches only) | 11.8 s | `[propext]` |
-  | `fast-lean build Demo.Top` (`Top` checked, its imports shortcut) | 11.0 s | `top` inherits `skippedProof` from `t` |
+  | `lake build` (official) | 55.7 s | `[propext]` |
+  | `fast-lean build` | 13.8 s | `[Lean.skippedProof]` |
+  | then `lake build` (official): rebuilds all 4 targets | 59.9 s | `[propext]` |
+  | `LEAN_DEV= fast-lean build` (faithful, perf patches only) | 10.4 s | `[propext]` |
+  | `fast-lean build Demo.Top` (`Top` checked, its imports shortcut) | 6.5 s | `top` inherits `skippedProof` from `t` |
 
-It does not speed up the final official build, which a merge gate still needs, and the module you are checking is elaborated in full (only the result-preserving performance patches apply to it). clifv, whose build time is dominated by kernel checking of single large declarations (`decide +kernel`/`rfl` over generated data, `bv_decide`), did not adopt it. For those, fix the proof (`lean-proof-performance` skill).
+  On this demo the gain comes from the performance patches (faithful mode is as fast): the `simp` fix and faster `match` equation generation (`Demo.Ops` alone: 25.9 s official vs 9.2 s dev). The proof-skipping gain is the ArkLib/clean figure above.
+
+It does not speed up the final official build, which a merge gate still needs. clifv found that wrapper tools (turbo-lean) do not help builds dominated by kernel checking of single large declarations (`decide +kernel`/`rfl` over generated data, `bv_decide`). Proof skipping doesn't help the module you are checking either (it is elaborated in full; only the result-preserving performance patches apply); fix the proof (`lean-proof-performance` skill).

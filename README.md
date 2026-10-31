@@ -38,9 +38,9 @@ Requirements: elan with `leanprover/lean4:v4.34.0` (and v4.29.0, v4.31.0, v4.33.
 
 ## Sources
 
-- ssz-fv `learnings.md`, section "`simp [block]` over a large instruction `match`" and the bottleneck measurements (x86/ARM refinement proofs; Lean 4.31.0).
+- [ssz-fv](https://github.com/kevaundray/ssz-fv) `learnings.md`, section "`simp [block]` over a large instruction `match`" and the bottleneck measurements (x86/ARM refinement proofs; Lean 4.31.0).
 - [eth-act/clifv](https://github.com/eth-act/clifv) `LEARNINGS.md` and `docs/` (verified compiler backend; Lean 4.34.1).
 - leanprover/lean4#15754 (`simp` and stuck `match`es) and its fix leanprover/lean4#15755.
 - The fast-lean toolchains: `script/fast-lean` in the `dev-fast-*` branches and the `fast-lean-dist` branch of [eth-act/lean4](https://github.com/eth-act/lean4).
-- Our own profiles of ArkLib, clean, evm-asm and ssz-fv builds (Oct 2026).
+- Our own profiles of [ArkLib](https://github.com/Verified-zkEVM/ArkLib), [clean](https://github.com/Verified-zkEVM/clean), [evm-asm](https://github.com/kevaundray/evm-asm) and ssz-fv builds (Oct 2026).
 - Lean source (`src/Lean/Meta/Tactic/Simp/Rewrite.lean`, `src/Lean/DefEqAttrib.lean`, `src/Lean/Elab/MutualDef.lean`, `src/lake/Lake/Config/LeanConfig.lean`) for mechanisms.

@@ -15,8 +15,8 @@ attribute [local simp] Op.effect   -- forces Op.effect.eq_* here; importers reus
 
 def block (ops : List Op) (s : S) : S := ops.foldl (fun t op => op.effect t) s
 
-@[simp] theorem block_nil (s : S) : block [] s = s := (rfl)
-@[simp] theorem block_cons (op : Op) (ops : List Op) (s : S) :
+theorem block_nil (s : S) : block [] s = s := (rfl)
+theorem block_cons (op : Op) (ops : List Op) (s : S) :
     block (op :: ops) s = block ops (op.effect s) := (rfl)
 
 def blockS : List Op → S → S
@@ -31,6 +31,15 @@ theorem block_f7 (ops : List Op) (s : S) : (block ops s).f7 = s.f7 := by
 
 theorem uses_steps (s : S) : (block [.inc, .clear, .inc] s).f0 = 1 := by
   simp [block_cons, block_nil, Op.effect]
+def blockR (ops : List Op) (s : S) : S := ops.foldl (fun t op => op.effect t) s
+theorem blockR_cons (op : Op) (ops : List Op) (s : S) :
+    blockR (op :: ops) s = blockR ops (op.effect s) := rfl
+theorem blockR_nil (s : S) : blockR [] s = s := rfl
+theorem no_implicit (s : S) : (blockR [.inc, .clear, .inc] s).f0 = 1 := by
+  simp -implicitDefEqProofs [blockR_cons, blockR_nil, Op.effect]
+theorem dsimp_defeq (op : Op) (ops : List Op) (s : S) :
+    blockR (op :: ops) s = blockR ops (op.effect s) := by
+  dsimp only [blockR_cons]
 theorem uses_structural (s : S) : (blockS [.inc, .clear, .inc] s).f0 = 1 := by
   simp [blockS, Op.effect]
 theorem one_unfold (s : S) : Op.effect .inc s = { s with f0 := s.f0 + 1 } := by
@@ -44,7 +53,7 @@ theorem reducible_assumption (s : S) (h : (block [.inc] s).f7 = 3) : (block [.in
 theorem reducible_exact (s : S) (h : (block [.inc] s).f7 = 3) : (block [.inc] s).f7 = 3 := by
   with_reducible exact h
 theorem with_instances (s : S) : (block [.clear] s).f0 = 0 := by
-  simp +instances [Op.effect]
+  simp +instances [block_cons, block_nil, Op.effect]
 
 count_hb in
 theorem kernel_decide : ∀ x ∈ List.range 200, x * x % 7 ≠ 3 := by decide +kernel

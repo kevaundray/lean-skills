@@ -21,9 +21,10 @@ CPU is user + sys seconds of the `lean`/`lake` process and its children (user in
 | `eqns-upstream` | generated | equation lemmas generated once in the defining module vs in every importer |
 | `listing-lemmas` | `listing_source` | instruction-fetch lemmas by `simp [prog]` vs `decide` vs `rfl` |
 | `decide` | `decide/*.lean` | `decide` vs `decide +kernel` vs `native_decide`; `List` vs `Array` scans in the kernel; well-founded recursion |
-| `olean-paths` | `olean-paths/M.lean` | linter warnings store the source path in the `.olean` (Lean 4.29–4.35) |
+| `olean-paths` | `olean-paths/M.lean` | linter warnings store the source path in the `.olean` (Lean 4.31–4.35; not 4.29) |
 | `lake-weak-args` | generated Lake project | `weakLeanArgs` is not traced and makes the `.olean`s path-independent |
 | `fast-lean` | generated Lake project | `fast-lean build` vs `lake build`, faithful mode, axioms after each step |
 | `snippets` | `snippets/Snippets.lean` | the code snippets quoted in the skills compile |
+| `versions` | generated | version ranges (4.26–4.35): `:= rfl` tagging, `native_decide` axioms, the stuck-`match` pathology |
 
 `lib/HB.lean` (`count_hb in <command>`: heartbeats of one command, core-only) and `lib/OleanStats.lean` (`lean --run lib/OleanStats.lean M.olean`: size, constants, match equations, splitters, equation lemmas) are reusable on their own.

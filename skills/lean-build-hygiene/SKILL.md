@@ -18,8 +18,8 @@ Rebuild cost is decided by the import graph and by whether outputs are byte-iden
   weakLeanArgs = ["-Dlinter.unusedVariables=false", "-Dlinter.unusedSimpArgs=false"]
   ```
 
-  `weakLeanArgs` is not part of the module trace: adding it did not rebuild anything, while the same flag in `moreLeanArgs` did, and fresh builds in two directories were then byte-identical (`examples/results/lake-weak-args.md`). The editor (`lake serve` uses `leanOptions`) still shows the warnings. clifv found 337 of 1,922 oleans carrying a worktree path, from `unusedSimpArgs`, `unusedVariables`, `unnecessarySimpa`, `unusedSectionVars`, `defProp`, `constructorNameAsVariable`; a nondeterministic `IselTermFactsCall` rebuilt 30 downstream modules (one ~1,930 s).
-- To find the culprits: `grep -c "$PWD" .lake/build/lib/lean/**/*.olean`, or build the same commit in two directories and compare hashes.
+  `weakLeanArgs` is not part of the module trace: adding it did not rebuild anything, while the same flag in `moreLeanArgs` did, and fresh builds in two directories were then byte-identical (`examples/results/lake-weak-args.md`). The editor (`lake serve` uses `leanOptions`) still shows the warnings, but build logs (CI) no longer do; run the linters separately if CI should report them. clifv found 337 of 1,922 oleans carrying a worktree path, from `unusedSimpArgs`, `unusedVariables`, `unnecessarySimpa`, `unusedSectionVars`, `defProp`, `constructorNameAsVariable`; a nondeterministic `IselTermFactsCall` rebuilt 30 downstream modules (one ~1,930 s).
+- To find the culprits: `grep -rlF --include='*.olean*' "$PWD" .lake/build/lib/lean` (with the module system the path lands in `M.olean.server`), or build the same commit in two directories and compare hashes.
 - Use `leanOptions`/`moreLeanArgs` only for options that change results (they are traced); use `weakLeanArgs` for diagnostics-only options.
 
 ## Import graph
@@ -33,12 +33,12 @@ Rebuild cost is decided by the import graph and by whether outputs are byte-iden
 
 - One `lean` process per module; its peak memory is roughly its heaviest declarations together. Splitting a heavy module into parts (keep the old module as a file importing the parts, so importers don't change) lowers the peak and lets the parts build in parallel. clifv: 19.3 → 6.1 GB, 15.2 → 4.5 GB; no gain when one declaration alone is the peak. Splitting does not make the same reduction cheaper; it only helps when it isolates obligations or dependencies (ssz-fv).
 - Memory-cap every Lean process (cgroup/`systemd-run --user -p MemoryMax=...`) on shared machines; one runaway `lean` can trigger global OOM kills (clifv).
-- More threads per Lean process rarely help: slow modules spend their time in one declaration (clifv: median CPU/wall 1.01 over 4,198 module builds). Exception: keep `Elab.async` on for `bv_decide`-heavy modules (clifv: 1,652 s off vs 174–186 s on, at about twice the memory).
+- When a module's time is in one declaration, more threads per Lean process don't help (clifv: median CPU/wall 1.01 over 4,198 module builds). Exception: keep `Elab.async` on for `bv_decide`-heavy modules (clifv: 1,652 s off vs 174–186 s on, at about twice the memory).
 
 ## Caches and rebuild checks
 
 - Official `lake exe cache get` (Mathlib) oleans are reused as is, also by the fast-lean dev toolchains (see the `fast-lean` skill).
-- Ask Lake once what is out of date instead of starting one `lake build <M>` per module: `lake build --no-build <targets>` builds nothing; it names each out-of-date module (`error: target is out-of-date and needs to be rebuilt`) and exits non-zero (3 with Lake 4.34), and prints `All targets up-to-date` otherwise. clifv's scheduler uses one such call per batch: a fully cached 3,138-module check went from 27.5 min to 1.9 s.
+- Ask Lake once what is out of date instead of starting one `lake build <M>` per module: `lake build --no-build <targets>` builds nothing. It names the out-of-date modules whose imports are up to date (`error: target is out-of-date and needs to be rebuilt`), not their dependents, and exits 3 (Lake 4.34); otherwise it prints `All targets up-to-date`. Rebuild those, then ask again for the next layer. clifv's scheduler uses one such call per batch: a fully cached 3,138-module check went from 27.5 min to 1.9 s.
 - Don't build the same module concurrently in two worktrees that share a cache; the second build gains nothing (clifv serialises them with a per-module `flock`).
 - Hard-linked cache outputs are read-only; building over them fails with `permission denied` at the end of the build (clifv). Unlink a module's outputs before rebuilding it.
 
