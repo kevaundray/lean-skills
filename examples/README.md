@@ -25,6 +25,9 @@ CPU is user + sys seconds of the `lean`/`lake` process and its children (user in
 | `lake-weak-args` | generated Lake project | `weakLeanArgs` is not traced and makes the `.olean`s path-independent |
 | `fast-lean` | generated Lake project | `fast-lean build` vs `lake build`, faithful mode, axioms after each step |
 | `snippets` | `snippets/Snippets.lean` | the code snippets quoted in the skills compile |
+| `budget` | `lib/Budget.lean`, generated | a heartbeat-budgeted `first` picks a different proof per budget and per Lean version (4.29–4.35); failed alternatives cost their budget |
+| `first-chain` | generated | `first \| omega \| (simp; done) \| decide +kernel` vs the winner alone |
+| `kernel-rfl` | `lib/KernelRfl.lean`, generated | term/tactic `rfl`, `decide`, `decide_cbv`, `decide +kernel`, kernel-only `kernel_rfl` on a closed computation; `kernel_rfl` on a false goal |
 | `versions` | generated | version ranges (4.26–4.35): `:= rfl` tagging, `native_decide` axioms, the stuck-`match` pathology |
 
-`lib/HB.lean` (`count_hb in <command>`: heartbeats of one command, core-only) and `lib/OleanStats.lean` (`lean --run lib/OleanStats.lean M.olean`: size, constants, match equations, splitters, equation lemmas) are reusable on their own.
+`lib/HB.lean` (`count_hb in <command>`: heartbeats of one command, core-only), `lib/Budget.lean` (`budget K => tac`), `lib/KernelRfl.lean` (`kernel_rfl`) and `lib/OleanStats.lean` (`lean --run lib/OleanStats.lean M.olean`: size, constants, match equations, splitters, equation lemmas) are reusable on their own.

@@ -623,6 +623,124 @@ def exp_fast_lean():
         + "; ".join(ops) + "."])
 
 
+BUDGET_GOAL = "∀ x ∈ List.range 100, x * x % 7 ≠ 3"
+
+
+def budget_source(k):
+    """A search tactic in miniature: `decide` under a budget of `k` thousand heartbeats, then a
+    fallback; `k = None` calls one tactic directly."""
+    tac = (f"\n  first\n  | budget {k} => decide\n  | decide +kernel" if isinstance(k, int)
+           else f" {k}")
+    return f"import Budget\nimport HB\ncount_hb in\ntheorem t : {BUDGET_GOAL} := by{tac}\n"
+
+
+def exp_budget():
+    """Heartbeat budgets decide which proof a search finds, and failed alternatives cost their
+    budget on every build."""
+    rows = []
+    lean = Lean(OFFICIAL)
+    for k in (None, "decide +kernel", "decide", 100, 240, 250, 2000):
+        if k is None:
+            continue
+        d = fresh("budget", re.sub(r"\W", "", str(k)))
+        setup(lean, d, sources={"T": budget_source(k)}, libs=("HB", "Budget"))
+        cpu, o = lean.cpu(d / "T.lean", d)
+        tries = "; ".join(l.split(": ", 1)[1] for l in o.splitlines() if l.startswith("budget "))
+        sha = hashlib.sha256((d / "T.olean").read_bytes()).hexdigest()[:12]
+        label = f"`first \\| budget {k} => decide \\| decide +kernel`" if isinstance(k, int) \
+            else f"`{k}` alone"
+        rows.append([label, tries or "—", f"{heartbeats(o):,}k", secs(cpu), sha])
+    vrows = []
+    for v in ("v4.29.0", "v4.31.0", "v4.33.1", "v4.34.0", "v4.34.1", "v4.35.0"):
+        try:
+            lv = Lean(f"leanprover/lean4:{v}")
+        except RuntimeError:
+            continue
+        cells = [v]
+        for k in (2000, 250, 240):
+            d = fresh("budget", v, str(k))
+            setup(lv, d, sources={"T": budget_source(k)}, libs=("HB", "Budget"))
+            o = lv.run(d / "T.lean", d)[3]
+            line = next((l for l in o.splitlines() if l.startswith("budget ")), "?")
+            if k == 2000:
+                cells.append(re.search(r"after (\d+k)", line)[1])
+            else:
+                cells.append("`decide`" if "succeeded" in line else "fallback `decide +kernel`")
+        vrows.append(cells)
+    return "\n".join([
+        f"Goal `{BUDGET_GOAL}`. `lib/Budget.lean` defines `budget K => tac` (run `tac` with its own "
+        "budget of K thousand heartbeats; an overrun becomes an ordinary failure). Toolchain "
+        f"`{lean.version}` for the first table. Heartbeats = whole theorem (`count_hb`), "
+        "olean = sha256 of `T.olean`.\n",
+        table(["proof", "budgeted attempt", "heartbeats", "CPU", "olean"], rows),
+        "\nThe same source on several official toolchains: heartbeats `decide` needs (budget "
+        "2000k), and which alternative wins with budgets of 250k and 240k:\n",
+        table(["Lean", "`decide` needs", "winner, budget 250k", "winner, budget 240k"], vrows)])
+
+
+def kernel_rfl_source(n, proof):
+    v = n * (n - 1) // 2
+    return (f"import KernelRfl\nimport HB\ncount_hb in\n"
+            f"theorem t : (List.range {n}).foldl (· + ·) 0 = {v} := {proof}\n")
+
+
+def exp_kernel_rfl():
+    """Closing a closed computation `a = b`: elaborator `rfl`/`decide` vs kernel-only
+    `decide +kernel`/`kernel_rfl` vs `decide_cbv`."""
+    lean = Lean(OFFICIAL)
+    proofs = ["rfl", "by rfl", "by decide", "by decide_cbv", "by decide +kernel", "by kernel_rfl"]
+    rows = []
+    for n in (100, 1000):
+        for pf in proofs:
+            d = fresh("kernel-rfl", str(n), re.sub(r"\W", "", pf))
+            setup(lean, d, sources={"T": kernel_rfl_source(n, pf)}, libs=("HB", "KernelRfl"))
+            rc, cpu, _, o = lean.run(d / "T.lean", d)
+            err = next((l.split("error: ")[-1] for l in o.splitlines() if "error" in l), "")
+            size = mb((d / "T.olean").stat().st_size) if rc == 0 else ""
+            if rc == 0:
+                cpu = lean.cpu(d / "T.lean", d)[0]
+            rows.append([n, f"`{pf}`", "ok" if rc == 0 else f"error: `{err}`",
+                         f"{heartbeats(o):,}k", secs(cpu), size])
+    d = fresh("kernel-rfl", "false-goal")
+    (d / "F.lean").write_text("import KernelRfl\n"
+                              "theorem bad : (List.range 20).foldl (· + ·) 0 = 1 := by kernel_rfl\n")
+    setup(lean, d, libs=("KernelRfl",))
+    o = lean.run(d / "F.lean", d)[3]
+    return "\n".join([
+        f"Toolchain: `{lean.version}`. Goal `(List.range n).foldl (· + ·) 0 = n(n-1)/2`, one "
+        "theorem per module; `kernel_rfl` from `lib/KernelRfl.lean` (`MVarId.refl` with "
+        "`check := false`). Heartbeats = whole theorem incl. the kernel check (`count_hb`, "
+        "synchronous); CPU = whole module.\n",
+        table(["n", "proof", "result", "heartbeats", "CPU", "olean"], rows),
+        "\n`kernel_rfl` on a false goal (`(List.range 20).foldl (· + ·) 0 = 1`): the kernel "
+        "rejects it:\n", trim(o.replace(f"{d}/", ""), 8)])
+
+
+def first_chain_source(proof, n=10):
+    L = ["import HB"]
+    for j in range(n):
+        L.append(f"count_hb in\ntheorem t{j} : ∀ x ∈ List.range {90 + j}, x * x % 7 ≠ 3 := by\n"
+                 f"  {proof}")
+    return "\n".join(L) + "\n"
+
+
+def exp_first_chain():
+    """`first | a | b | c`: the failing alternatives are paid on every build."""
+    lean = Lean(OFFICIAL)
+    rows = []
+    for name, pf in (("chain", "first | omega | (simp; done) | decide +kernel"),
+                     ("winner", "decide +kernel")):
+        d = fresh("first-chain", name)
+        setup(lean, d, sources={"T": first_chain_source(pf)})
+        cpu, o = lean.cpu(d / "T.lean", d)
+        hb = [int(x) for x in re.findall(r"heartbeats: (\d+)k", o)]
+        rows.append([f"`{pf}`".replace("|", "\\|"), f"{sum(hb):,}k", secs(cpu)])
+    return "\n".join([
+        f"Toolchain: `{lean.version}`. Ten theorems `∀ x ∈ List.range m, x * x % 7 ≠ 3` "
+        "(m = 90..99), each proved by the given tactic; heartbeats summed over the ten.\n",
+        table(["proof", "heartbeats", "module CPU"], rows)])
+
+
 VERSIONS = ["v4.26.0", "v4.28.0", "v4.29.0", "v4.31.0", "v4.33.1", "v4.34.0", "v4.35.0"]
 
 
@@ -688,6 +806,9 @@ EXPERIMENTS = {
     "fast-lean": exp_fast_lean,
     "snippets": exp_snippets,
     "versions": exp_versions,
+    "budget": exp_budget,
+    "first-chain": exp_first_chain,
+    "kernel-rfl": exp_kernel_rfl,
 }
 
 

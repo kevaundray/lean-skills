@@ -20,6 +20,7 @@ Rebuild cost is decided by the import graph and by whether outputs are byte-iden
 
   `weakLeanArgs` is not part of the module trace: adding it did not rebuild anything, while the same flag in `moreLeanArgs` did, and fresh builds in two directories were then byte-identical (`examples/results/lake-weak-args.md`). The editor (`lake serve` uses `leanOptions`) still shows the warnings, but build logs (CI) no longer do; run the linters separately if CI should report them. clifv found 337 of 1,922 oleans carrying a worktree path, from `unusedSimpArgs`, `unusedVariables`, `unnecessarySimpa`, `unusedSectionVars`, `defProp`, `constructorNameAsVariable`; a nondeterministic `IselTermFactsCall` rebuilt 30 downstream modules (one ~1,930 s).
 - To find the culprits: `grep -rlF --include='*.olean*' "$PWD" .lake/build/lib/lean` (with the module system the path lands in `M.olean.server`), or build the same commit in two directories and compare hashes.
+- Tactics that pick between alternatives by heartbeat budgets make `.olean`s depend on the Lean version's heartbeat accounting, not only on the source (`lean-proof-performance`, "Search tactics"); expect such modules to change on toolchain bumps and record the winning alternatives instead.
 - Use `leanOptions`/`moreLeanArgs` only for options that change results (they are traced); use `weakLeanArgs` for diagnostics-only options.
 
 ## Import graph

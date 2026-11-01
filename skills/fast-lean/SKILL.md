@@ -25,6 +25,7 @@ fast-lean build +Foo               # the module Foo (a bare `Foo` is a library/p
 fast-lean lean My/Module.lean      # like `lake lean`: this file fully (except `sat`), imports with shortcuts
 LEAN_DEV= fast-lean build          # faithful: dev toolchain, no shortcuts
 LEAN_DEV_CHECK=My.Area fast-lean build   # also check modules with these name prefixes fully
+LEAN_DEV_NATIVE=1 fast-lean build  # also run dependencies' tactics natively (Linux)
 lake build                         # official toolchain: rebuilds and fully checks what fast-lean built
 ```
 
@@ -37,6 +38,8 @@ lake build                         # official toolchain: rebuilds and fully chec
 | `sat` | `bv_decide` trusts the SAT solver's UNSAT answer (no LRAT check) and caches solved problems in `~/.cache/lean/trusted-unsat` | `skippedProof` |
 
 Statements, definitions and their compiled code are still elaborated, so type errors in statements and broken downstream uses show up; errors inside skipped proofs do not.
+
+`LEAN_DEV_NATIVE=1` (Linux, opt-in, in dev toolchains whose `fast-lean --help` lists it) compiles the dependencies' modules that the project imports to a native shared library per package and loads them, so Mathlib/Batteries/Aesop tactics and linters run natively instead of in the interpreter. Outputs are unchanged and it works with faithful mode (`LEAN_DEV=`). The first build compiles the dependencies (minutes for Mathlib; cached in `~/.cache/fast-lean/native`), later builds save about 5–10% CPU on Mathlib-heavy projects: in faithful mode ArkLib −8% total / −13% user CPU, clean −7.5% user. It covers dependency packages only; tactics defined in the project itself stay interpreted.
 
 ## Guarantees
 
